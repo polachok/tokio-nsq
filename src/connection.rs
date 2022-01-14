@@ -207,9 +207,9 @@ impl Drop for NSQMessage {
 struct NSQDConnectionState {
     config: NSQDConfig,
     from_connection_tx: tokio::sync::mpsc::UnboundedSender<NSQEvent>,
-    to_connection_rx: tokio::sync::mpsc::UnboundedReceiver<MessageToNSQ>,
+    to_connection_rx: tokio::sync::mpsc::Receiver<MessageToNSQ>,
     to_connection_tx_ref:
-        std::sync::Arc<tokio::sync::mpsc::UnboundedSender<MessageToNSQ>>,
+        std::sync::Arc<tokio::sync::mpsc::Sender<MessageToNSQ>>,
     shared: Arc<NSQDConnectionShared>,
 }
 
@@ -217,7 +217,7 @@ struct NSQDConnectionState {
 struct NSQDConnectionShared {
     healthy: AtomicBool,
     to_connection_tx_ref:
-        Arc<tokio::sync::mpsc::UnboundedSender<MessageToNSQ>>,
+        Arc<tokio::sync::mpsc::Sender<MessageToNSQ>>,
     inflight: AtomicU64,
     current_ready: AtomicU16,
     max_ready: AtomicU16,
@@ -320,7 +320,7 @@ async fn handle_reads<S: AsyncRead + std::marker::Unpin>(
         match read_frame_data(stream).await? {
             Frame::Response(body) => {
                 if body == b"_heartbeat_" {
-                    shared.to_connection_tx_ref.send(MessageToNSQ::NOP)?;
+                    shared.to_connection_tx_ref.send(MessageToNSQ::NOP).await?;
                 } else if body == b"OK" {
                     from_connection_tx.send(NSQEvent::Ok())?;
                 }
@@ -573,7 +573,7 @@ async fn handle_single_command<S: AsyncWrite + std::marker::Unpin>(
 async fn handle_commands<S: AsyncWrite + std::marker::Unpin>(
     config: &NSQDConfig,
     shared: &NSQDConnectionShared,
-    to_connection_rx: &mut tokio::sync::mpsc::UnboundedReceiver<MessageToNSQ>,
+    to_connection_rx: &mut tokio::sync::mpsc::Receiver<MessageToNSQ>,
     stream: &mut S,
 ) -> Result<(), Error> {
     let mut interval = tokio::time::interval(config.shared.flush_interval);
@@ -957,7 +957,7 @@ pub struct NSQDConnection {
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
     from_connection_rx: tokio::sync::mpsc::UnboundedReceiver<NSQEvent>,
     to_connection_tx_ref:
-        std::sync::Arc<tokio::sync::mpsc::UnboundedSender<MessageToNSQ>>,
+        std::sync::Arc<tokio::sync::mpsc::Sender<MessageToNSQ>>,
     shared: Arc<NSQDConnectionShared>,
 }
 
@@ -993,7 +993,7 @@ impl NSQDConnection {
     ) -> NSQDConnection {
         let (write_shutdown, read_shutdown) = tokio::sync::oneshot::channel();
         let (to_connection_tx, to_connection_rx) =
-            tokio::sync::mpsc::unbounded_channel();
+            tokio::sync::mpsc::channel(10_000); // TODO
 
         let to_connection_tx_ref_1 = std::sync::Arc::new(to_connection_tx);
         let to_connection_tx_ref_2 = to_connection_tx_ref_1.clone();
@@ -1051,12 +1051,12 @@ impl NSQDConnection {
         self.from_connection_rx.recv().await
     }
 
-    pub fn queue_message(
+    pub async fn queue_message(
         &self,
         message: MessageToNSQ,
     ) -> Result<(), Error> {
         if self.shared.healthy.load(Ordering::SeqCst) {
-            if self.to_connection_tx_ref.send(message).is_err() {
+            if self.to_connection_tx_ref.send(message).await.is_err() {
                 return Err(Error::from(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     "queue message lock failed",
