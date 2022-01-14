@@ -65,6 +65,12 @@ impl NSQProducer {
         self.connection.consume().await
     }
 
+    /// Try to consume message acknowledgements, and connection status updates.
+    /// Returns `None` if there's nothing to consume.
+    pub fn try_consume(&mut self) -> Option<NSQEvent> {
+        self.connection.try_consume()
+    }
+
     /// Queue a PUB message to be asynchronously sent
     pub async fn publish(
         &mut self,

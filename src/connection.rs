@@ -1061,6 +1061,11 @@ impl NSQDConnection {
         self.from_connection_rx.recv().await
     }
 
+
+    pub fn try_consume(&mut self) -> Option<NSQEvent> {
+        self.from_connection_rx.try_recv().ok()
+    }
+
     pub async fn queue_message(
         &self,
         message: MessageToNSQ,
