@@ -1,7 +1,7 @@
 use ::async_compression::tokio::bufread::DeflateDecoder;
 use ::async_compression::tokio::write::DeflateEncoder;
 use ::backoff::backoff::Backoff;
-use ::anyhow::{Error};
+use ::anyhow::{Error, Context};
 use ::thiserror::Error;
 use ::log::*;
 use ::rustls::*;
@@ -687,7 +687,9 @@ fn read_to_dyn<S: Send + AsyncRead + std::marker::Unpin + 'static>(
 
 async fn run_connection(state: &mut NSQDConnectionState) -> Result<(), Error> {
     let stream =
-        tokio::net::TcpStream::connect(state.config.address.clone()).await?;
+        tokio::net::TcpStream::connect(state.config.address.clone())
+            .await
+            .with_context(|| "TcpStream connect")?;
 
     let mut stream = TimeoutStream::new(stream);
     if let Some(timeout) = state.config.shared.write_timeout {
@@ -737,7 +739,7 @@ async fn run_connection(state: &mut NSQDConnectionState) -> Result<(), Error> {
     stream.write_all(serialized.as_bytes()).await?;
     stream.flush().await?;
 
-    let settings: IdentifyResponse = match read_frame_data(&mut stream).await? {
+    let settings: IdentifyResponse = match read_frame_data(&mut stream).await.with_context(|| "reading identify")? {
         Frame::Response(body) => serde_json::from_slice(&body)?,
         _ => {
             return Err(Error::from(std::io::Error::new(
@@ -854,7 +856,7 @@ async fn run_connection(state: &mut NSQDConnectionState) -> Result<(), Error> {
             let mut stream_rx = NSQSnappyInflate::new(stream_rx);
             let stream_tx = NSQSnappyDeflate::new(stream_tx);
 
-            match read_frame_data(&mut stream_rx).await? {
+            match read_frame_data(&mut stream_rx).await.with_context(|| "reading compressed ok")? {
                 Frame::Response(body) => {
                     if body != b"OK" {
                         return Err(Error::from(std::io::Error::new(
@@ -893,7 +895,7 @@ async fn run_connection(state: &mut NSQDConnectionState) -> Result<(), Error> {
 
     info!("handshake completed");
 
-    run_generic(state, stream_rx, stream_tx).await?;
+    run_generic(state, stream_rx, stream_tx).await.with_context(|| "run generic")?;
 
     Ok(())
 }
