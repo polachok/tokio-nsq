@@ -914,6 +914,8 @@ async fn run_connection_supervisor(mut state: NSQDConnectionState) {
 
                 let _ = state.from_connection_tx.send(NSQEvent::Unhealthy());
 
+                error!("run connection error: {}", generic);
+
                 if let Some(error) = generic.downcast_ref::<tokio::io::Error>()
                 {
                     error!("tokio io error: {}", error);
