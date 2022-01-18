@@ -274,6 +274,9 @@ where
             }
         }
 
+        this.output_start = 0;
+        this.output_end = 0;
+
         Pin::new(&mut self.inner).poll_flush(cx)
     }
 
