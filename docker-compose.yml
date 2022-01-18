@@ -42,5 +42,7 @@ services:
     image: rust
     working_dir: "/app"
     user: "${UID}:${GID}"
+    stdin_open: true
+    tty: true
     volumes:
       - .:/app:rw

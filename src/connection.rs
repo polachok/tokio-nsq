@@ -1,8 +1,8 @@
 use ::async_compression::tokio::bufread::DeflateDecoder;
 use ::async_compression::tokio::write::DeflateEncoder;
 use ::backoff::backoff::Backoff;
-use ::failure::Error;
-use ::failure::Fail;
+use ::anyhow::{Error};
+use ::thiserror::Error;
 use ::log::*;
 use ::rustls::*;
 use ::std::convert::TryFrom;
@@ -33,7 +33,7 @@ use crate::with_stopper::with_stopper;
 pub(crate) const RX_QUEUE_CAPACITY: usize = 10_000;
 const TX_QUEUE_CAPACITY: usize = 10_000;
 
-#[derive(Debug, Fail)]
+#[derive(Debug, Error)]
 struct NoneError;
 
 impl fmt::Display for NoneError {
@@ -42,7 +42,7 @@ impl fmt::Display for NoneError {
     }
 }
 
-#[derive(Debug, Fail)]
+#[derive(Debug, Error)]
 struct ProtocolError {
     message: String,
 }
@@ -337,7 +337,8 @@ async fn handle_reads<S: AsyncRead + std::marker::Unpin>(
 
                 continue;
             }
-            Frame::Error(_) => {
+            Frame::Error(err) => {
+                error!("received error frame: {:?}", err);
                 // should be impossible except for non fatal errors based on
                 // `read_frame_data`
             }
