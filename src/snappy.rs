@@ -217,7 +217,7 @@ where
                         this.output_start += n;
 
                         if this.output_start != this.output_end {
-                            return Poll::Pending;
+                            continue;
                         } else {
                             return Poll::Ready(Ok(input_len));
                         }
@@ -260,7 +260,7 @@ where
                     this.output_start += n;
 
                     if this.output_start != this.output_end {
-                        return Poll::Pending;
+                        continue;
                     } else {
                         break;
                     }
