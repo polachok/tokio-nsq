@@ -10,7 +10,6 @@ use ::std::fmt;
 use ::std::pin::Pin;
 use ::std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use ::std::sync::Arc;
-use ::std::time::Instant;
 use ::std::task::Poll;
 use ::tokio::io::ReadBuf;
 use ::tokio::io::AsyncRead;
@@ -905,8 +904,6 @@ async fn run_connection_supervisor(mut state: NSQDConnectionState) {
     backoff.max_interval = state.config.shared.backoff_max_wait;
 
     loop {
-        let now = Instant::now();
-
         match run_connection(&mut state).await {
             Err(generic) => {
                 state.shared.healthy.store(false, Ordering::SeqCst);
@@ -953,18 +950,17 @@ async fn run_connection_supervisor(mut state: NSQDConnectionState) {
             warn!("drained {} messages", drained);
         }
 
-        if now.elapsed() >= state.config.shared.backoff_healthy_after {
-            info!("run_connection_supervisor resetting backoff");
+        if let Some(sleep_for) = backoff.next_backoff() {
+            info!(
+                "run_connection_supervisor sleeping for: {}",
+                sleep_for.as_secs()
+            );
+            tokio::time::sleep(sleep_for).await;
 
+        } else {
+            info!("run_connection_supervisor resetting backoff");
             backoff.reset();
         }
-
-        let sleep_for = backoff.next_backoff().unwrap();
-        info!(
-            "run_connection_supervisor sleeping for: {}",
-            sleep_for.as_secs()
-        );
-        tokio::time::sleep(sleep_for).await;
     }
 }
 
