@@ -38,7 +38,7 @@ struct NoneError;
 
 impl fmt::Display for NoneError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self)
+        write!(f, "{:?}", self)
     }
 }
 
@@ -49,7 +49,7 @@ struct ProtocolError {
 
 impl fmt::Display for ProtocolError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self)
+        write!(f, "Protocol error: {}", self.message)
     }
 }
 
