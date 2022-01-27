@@ -22,6 +22,7 @@ use ::tokio_rustls::{rustls::ClientConfig, TlsConnector};
 use ::futures_util::FutureExt;
 use ::std::time::Duration;
 use ::futures::Future;
+use ::bytes::{Bytes, BytesMut, BufMut};
 
 use crate::built_info;
 use crate::connection_config::*;
@@ -117,7 +118,7 @@ pub enum MessageToNSQ {
 pub struct NSQMessage {
     context: Arc<NSQDConnectionShared>,
     consumed: bool,
-    pub body: Vec<u8>,
+    pub body: Bytes,
     pub attempt: u16,
     pub id: [u8; 16],
     pub timestamp: u64,
@@ -224,13 +225,13 @@ struct FrameMessage {
     timestamp: u64,
     attempt: u16,
     id: [u8; 16],
-    body: Vec<u8>,
+    body: Bytes,
 }
 
 #[derive(Debug)]
 enum Frame {
-    Response(Vec<u8>),
-    Error(Vec<u8>),
+    Response(Bytes),
+    Error(Bytes),
     Message(FrameMessage),
     Unknown,
 }
@@ -238,6 +239,23 @@ enum Frame {
 const FRAME_TYPE_RESPONSE: i32 = 0;
 const FRAME_TYPE_ERROR: i32 = 1;
 const FRAME_TYPE_MESSAGE: i32 = 2;
+
+async fn read_buf_exact<S, B>(stream: &mut S, buf: &mut B, len: usize) -> Result<(), Error>
+    where S: AsyncRead + std::marker::Unpin,
+          B: BufMut,
+{
+    use std::io::ErrorKind;
+
+    let mut n = 0;
+    while n < len {
+        let read = stream.read_buf(buf).await?;
+        if read == 0 {
+            return Err(std::io::Error::new(ErrorKind::UnexpectedEof, "eof").into());
+        }
+        n += read;
+    }
+    Ok(())
+}
 
 async fn read_frame_data<S: AsyncRead + std::marker::Unpin>(
     stream: &mut S,
@@ -255,27 +273,25 @@ async fn read_frame_data<S: AsyncRead + std::marker::Unpin>(
 
     match frame_type {
         FRAME_TYPE_RESPONSE => {
-            let mut frame_body = Vec::new();
-            frame_body.resize(frame_body_size as usize, 0);
-            stream.read_exact(&mut frame_body).await?;
+            let mut frame_body = BytesMut::with_capacity(frame_body_size as usize);
+            read_buf_exact(stream, &mut frame_body, frame_body_size as usize).await?;
 
-            Ok(Frame::Response(frame_body))
+            Ok(Frame::Response(frame_body.freeze()))
         }
         FRAME_TYPE_ERROR => {
-            let mut frame_body = Vec::new();
-            frame_body.resize(frame_body_size as usize, 0);
-            stream.read_exact(&mut frame_body).await?;
+            let mut frame_body = BytesMut::with_capacity(frame_body_size as usize);
+            read_buf_exact(stream, &mut frame_body, frame_body_size as usize).await?;
 
-            match frame_body.as_slice() {
+            match &frame_body[..] {
                 b"E_FIN_FAILED" | b"E_REQ_FAILED" | b"E_TOUCH_FAILED"  => {
                     warn!("non fatal protocol error {:?}", frame_body);
 
-                    Ok(Frame::Error(frame_body))
+                    Ok(Frame::Error(frame_body.freeze()))
                 }
                 _ => {
                     error!("fatal protocol error = {:?}", frame_body);
 
-                    let message = String::from_utf8(frame_body)?;
+                    let message = String::from_utf8(frame_body.to_vec())?;
 
                     Err(Error::from(ProtocolError {
                         message,
@@ -291,15 +307,14 @@ async fn read_frame_data<S: AsyncRead + std::marker::Unpin>(
             stream.read_exact(&mut message_id).await?;
 
             let body_size = frame_body_size - 8 - 2 - 16;
-            let mut message_body = Vec::new();
-            message_body.resize(body_size as usize, 0);
-            stream.read_exact(&mut message_body).await?;
+            let mut message_body = BytesMut::with_capacity(body_size as usize);
+            read_buf_exact(stream, &mut message_body, body_size as usize).await?;
 
             Ok(Frame::Message(FrameMessage {
                 timestamp: message_timestamp,
                 attempt: message_attempts,
                 id: message_id,
-                body: message_body,
+                body: message_body.freeze(),
             }))
         }
         _ => {
@@ -318,9 +333,9 @@ async fn handle_reads<S: AsyncRead + std::marker::Unpin>(
         let frame = read_frame_data(stream).await?;
         match frame {
             Frame::Response(body) => {
-                if body == b"_heartbeat_" {
+                if &body[..] == b"_heartbeat_" {
                     shared.to_connection_tx_ref.send(MessageToNSQ::NOP).await?;
-                } else if body == b"OK" {
+                } else if &body[..] == b"OK" {
                     from_connection_tx.send(NSQEvent::Ok()).await?;
                 }
 
@@ -531,6 +546,7 @@ async fn handle_single_command<S: AsyncWrite + std::marker::Unpin>(
                 write_rdy(stream, actual_ready).await?;
 
                 shared.current_ready.store(actual_ready, Ordering::SeqCst);
+                stream.flush().await?
             }
         }
         MessageToNSQ::FIN(id) => {
@@ -613,7 +629,7 @@ async fn run_generic<
 
         match read_frame_data(&mut stream_rx).await? {
             Frame::Response(body) => {
-                if body != b"OK" {
+                if &body[..] != b"OK" {
                     return Err(Error::from(std::io::Error::new(
                         std::io::ErrorKind::Other,
                         "subscribe negotiation expected response OK",
@@ -778,7 +794,7 @@ async fn run_connection(state: &mut NSQDConnectionState) -> Result<(), Error> {
 
         match read_frame_data(&mut stream_rx).await? {
             Frame::Response(body) => {
-                if body != b"OK" {
+                if &body[..] != b"OK" {
                     return Err(Error::from(std::io::Error::new(
                         std::io::ErrorKind::Other,
                         "tls negotiation expected OK",
@@ -815,7 +831,7 @@ async fn run_connection(state: &mut NSQDConnectionState) -> Result<(), Error> {
 
             match read_frame_data(&mut stream_rx).await? {
                 Frame::Response(body) => {
-                    if body != b"OK" {
+                    if &body[..] != b"OK" {
                         return Err(Error::from(std::io::Error::new(
                             std::io::ErrorKind::Other,
                             "compression negotiation expected OK",
@@ -844,7 +860,7 @@ async fn run_connection(state: &mut NSQDConnectionState) -> Result<(), Error> {
 
             match read_frame_data(&mut stream_rx).await? {
                 Frame::Response(body) => {
-                    if body != b"OK" {
+                    if &body[..] != b"OK" {
                         return Err(Error::from(std::io::Error::new(
                             std::io::ErrorKind::Other,
                             "compression negotiation expected OK",
