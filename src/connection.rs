@@ -553,6 +553,7 @@ async fn handle_single_command<S: AsyncWrite + std::marker::Unpin>(
             shared.inflight.fetch_sub(1, Ordering::SeqCst);
 
             write_fin(stream, &id).await?;
+            stream.flush().await?;
         }
         MessageToNSQ::TOUCH(id) => {
             write_touch(stream, &id).await?;
