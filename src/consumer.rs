@@ -280,9 +280,11 @@ async fn lookup(
         remove_old_connections(&mut guard);
     }
 
+    /*
     for client in new_clients.into_iter() {
         client.queue_message(MessageToNSQ::RDY(1)).await?;
     }
+    */
 
     rebalancer_step(config.max_in_flight, &clients_ref).await;
 
