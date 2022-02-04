@@ -331,7 +331,9 @@ async fn handle_reads<S: AsyncRead + std::marker::Unpin>(
 ) -> Result<(), Error> {
     loop {
         let frame = read_frame_data(stream).await?;
-        info!("from connection tx capacity: {}", from_connection_tx.capacity());
+        if from_connection_tx.capacity() == 0 {
+            warn!("from connection tx full");
+        }
         match frame {
             Frame::Response(body) => {
                 if &body[..] == b"_heartbeat_" {
@@ -1072,8 +1074,10 @@ impl NSQDConnection {
         &self,
         message: MessageToNSQ,
     ) -> Result<(), Error> {
+        if self.to_connection_tx_ref.capacity() == 0 {
+            warn!("to connection tx full");
+        }
         if self.shared.healthy.load(Ordering::SeqCst) {
-            info!("to connection tx capacity: {}", self.to_connection_tx_ref.capacity());
             if self.to_connection_tx_ref.send(message).await.is_err() {
                 return Err(Error::from(std::io::Error::new(
                     std::io::ErrorKind::Other,
